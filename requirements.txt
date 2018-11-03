@@ -6,3 +6,7 @@ snappy
 flask-restful
 flask-socketio
 jaqs
+aiohttp
+aiohttp_jinja2
+jinja2
+python-socketio
