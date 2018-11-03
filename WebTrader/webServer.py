@@ -2,12 +2,7 @@
 
 # 修改编码
 from __future__ import print_function
-import sys
-try:
-    reload(sys)  # Python 2
-    sys.setdefaultencoding('utf8')
-except NameError:
-    pass         # Python 3
+
 
 # 创建主引擎代理对象
 from vnpy.event import EventEngine2
@@ -48,643 +43,360 @@ with open("WEB_setting.json") as f:
     TOKEN = base64.encodestring((TODAY+PASSWORD).encode()).decode().replace('\n','')
 
 
-# 创建Flask对象
-from flask import Flask, send_file
-from flask_restful import Api, Resource, reqparse
-from flask_socketio import SocketIO
-from flask_cors import *
-
-app = Flask(__name__)
-CORS(app, supports_credentials=True)
-api = Api(app)
-socketio = SocketIO(app)
-
-# 创建资源
-########################################################################
-class Token(Resource):
-    """登录验证"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('username')
-        self.parser.add_argument('password')
-        super(Token, self).__init__()
-    
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        username = args['username']
-        password = args['password']
-        
-        if username == USERNAME and password == PASSWORD:
-            return {'result_code':'success','data':TOKEN}
-        else:
-            return {'result_code':'error','message':'wrong username or password'}
+# 创建aiohttp对象
+from aiohttp import web
+import aiohttp_jinja2
+import jinja2
+import socketio
+from queue import Queue
 
 
-########################################################################
-class Gateway(Resource):
-    """接口"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('gatewayName')
-        self.parser.add_argument('token')
-        
-        super(Gateway, self).__init__()
-    
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
-        
+q = Queue()
+
+sio = socketio.AsyncServer()
+app = web.Application(debug=False)
+routes = web.RouteTableDef()
+sio.attach(app)
+
+
+async def Token(request):
+    username = request.query['username']
+    password = request.query['password']
+
+    if username == USERNAME and password == PASSWORD:
+        return web.json_response({'result_code': 'success', 'data': TOKEN})
+    else:
+        return web.json_response({'result_code': 'error', 'message': 'wrong username or password'})
+
+
+async def Gateway(request):
+    if request.method == "GET":
+        token = request.query['token']
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
         l = me.getAllGatewayDetails()
-        return {'result_code':'success','data':l}
-    
-    #----------------------------------------------------------------------
-    def post(self):
-        """连接"""
-        args = self.parser.parse_args()
-        token = args['token']
+        return web.json_response({'result_code': 'success', 'data': l})
+
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            print('token error')
-            return {'result_code':'error','message':'token error'}
-                
-        gatewayName = args['gatewayName']
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        gatewayName = data.get('gatewayName',None)
         me.connect(gatewayName)
-        return {'result_code':'success','data':''}
+        return web.json_response({'result_code': 'success', 'data': ''})
 
 
-########################################################################
-class Order(Resource):
-    """委托"""
-
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.getParser = reqparse.RequestParser()    
-        self.getParser.add_argument('token')
-        
-        self.postParser = reqparse.RequestParser()
-        self.postParser.add_argument('vtSymbol')
-        self.postParser.add_argument('price')
-        self.postParser.add_argument('volume')
-        self.postParser.add_argument('priceType')
-        self.postParser.add_argument('direction')
-        self.postParser.add_argument('offset')
-        self.postParser.add_argument('token')
-        
-        self.deleteParser = reqparse.RequestParser()
-        self.deleteParser.add_argument('vtOrderID')        
-        self.deleteParser.add_argument('token')
-        
-        super(Order, self).__init__()
-    
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.getParser.parse_args()
-        token = args['token']
+async def Order(request):
+    if request.method == "GET":
+        token = request.query['token']
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
         data = me.getAllOrders()
         l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}
-    
-    #----------------------------------------------------------------------
-    def post(self):
-        """发单"""
-        args = self.postParser.parse_args()
-        token = args['token']
+        return web.json_response({'result_code': 'success', 'data': l})
+
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        print(args)
-        vtSymbol = args['vtSymbol']        
-        price = args['price']        
-        volume = args['volume']        
-        priceType = args['priceType']        
-        direction = args['direction']        
-        offset = args['offset']      
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        vtSymbol = data['vtSymbol']
+        price = data['price']
+        volume = data['volume']
+        priceType = data['priceType']
+        direction = data['direction']
+        offset = data['offset']
         contract = me.getContract(vtSymbol)
         if not contract:
-            return {'result_code':'error','message':'contract error'}
-        
-        priceType_map = {'PRICETYPE_LIMITPRICE' : u'限价','PRICETYPE_MARKETPRICE' : u'市价','PRICETYPE_FAK' : u'FAK','PRICETYPE_FOK' : u'FOK'}
-        direction_map = {'DIRECTION_LONG' : u'多','DIRECTION_SHORT' : u'空'}
-        offset_map    = {'OFFSET_OPEN' : u'开仓',  'OFFSET_CLOSE' : u'平仓','OFFSET_CLOSETODAY' : u'平今','OFFSET_CLOSEYESTERDAY' : u'平昨'}
-        
+            return web.json_response({'result_code':'error','message':'contract error'})
+
+        priceType_map = {'PRICETYPE_LIMITPRICE': u'限价', 'PRICETYPE_MARKETPRICE': u'市价', 'PRICETYPE_FAK': u'FAK',
+                         'PRICETYPE_FOK': u'FOK'}
+        direction_map = {'DIRECTION_LONG': u'多', 'DIRECTION_SHORT': u'空'}
+        offset_map = {'OFFSET_OPEN': u'开仓', 'OFFSET_CLOSE': u'平仓', 'OFFSET_CLOSETODAY': u'平今',
+                      'OFFSET_CLOSEYESTERDAY': u'平昨'}
+
         req = VtOrderReq()
-        req.symbol    = contract.symbol
-        req.exchange  = contract.exchange
-        req.price     = float(price)
-        req.volume    = int(volume)
-        req.priceType = priceType_map[ priceType ]
-        req.direction = direction_map[ direction ]
-        req.offset    = offset_map[ offset ]
-        vtOrderID     = me.sendOrder(req, contract.gatewayName)
-        return {'result_code':'success','data':vtOrderID}
-    
-    #----------------------------------------------------------------------
-    def delete(self):
-        """撤单"""
-        args = self.deleteParser.parse_args()
-        token = args['token']
+        req.symbol = contract.symbol
+        req.exchange = contract.exchange
+        req.price = float(price)
+        req.volume = int(volume)
+        req.priceType = priceType_map[priceType]
+        req.direction = direction_map[direction]
+        req.offset = offset_map[offset]
+        vtOrderID = me.sendOrder(req, contract.gatewayName)
+        return web.json_response({'result_code': 'success', 'data': vtOrderID})
+
+    if request.method == "DELETE":
+        token = request.query['token']
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        vtOrderID = args['vtOrderID']
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        vtOrderID = request.query['vtOrderID']
         # 撤单某一委托
         if vtOrderID:
             order = me.getOrder(vtOrderID)
             if not order:
-                return {'result_code':'error','message':'vtOrderID error'}
-            
-            self.cancel(order)
+                return web.json_response({'result_code': 'error', 'message': 'vtOrderID error'})
+
+            cancel(order)
         # 全撤
         else:
             l = me.getAllWorkingOrders()
-            
             for order in l:
-                self.cancel(order)
-            
-        return {'result_code':'success','data':""}
-    
-    #----------------------------------------------------------------------
-    def cancel(self, order):
-        """撤单"""
-        req = VtCancelOrderReq()
-        req.orderID = order.orderID
-        req.exchange = order.exchange
-        req.symbol = order.symbol
-        req.frontID = order.frontID
-        req.sessionID = order.sessionID
-        me.cancelOrder(req, order.gatewayName)                
+                cancel(order)
+        return web.json_response({'result_code': 'success', 'data': ""})
 
 
-########################################################################
-class Trade(Resource):
-    """成交"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Trade, self).__init__()    
+def cancel(order):
+    """撤单"""
+    req = VtCancelOrderReq()
+    req.orderID = order.orderID
+    req.exchange = order.exchange
+    req.symbol = order.symbol
+    req.frontID = order.frontID
+    req.sessionID = order.sessionID
+    me.cancelOrder(req, order.gatewayName)
 
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
+
+async def Contract(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getAllContracts()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Account(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getAllAccounts()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Position(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getAllPositions()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Log(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getLog()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Error(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getError()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Trade(request):
+    token = request.query['token']
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+    data = me.getAllTrades()
+    l = [o.__dict__ for o in data]
+    return web.json_response({'result_code': 'success', 'data': l})
+
+
+async def Tick(request):
+    data = request.content
+    data = json.loads(data._buffer[0])
+    token = data.get('token', None)
+    if token != TOKEN:
+        return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+    vtSymbol = data.get('vtSymbol', None)
+
+    contract = me.getContract(vtSymbol)
+    if not contract:
+        return web.json_response({'result_code': 'error', 'message': 'contract error'})
+
+    req = VtSubscribeReq()
+    req.symbol = contract.symbol
+    req.exchange = contract.exchange
+    req.vtSymbol = contract.vtSymbol
+
+    me.subscribe(req, contract.gatewayName)
+    return web.json_response({'result_code': 'success', 'data': ''})
+
+
+async def CtaStrategyLoad(request):
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getAllTrades()
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}
-    
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
 
-########################################################################
-class Account(Resource):
-    """账户"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Account, self).__init__()    
+        engine = me.getApp('CtaStrategy')
+        engine.loadSetting()
+        l = engine.getStrategyNames()
+        return web.json_response({'result_code': 'success', 'data': l})
 
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
+
+async def CtaStrategyInit(request):
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getAllAccounts()
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
 
+        name = data['name']
 
-########################################################################
-class Position(Resource):
-    """持仓"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Position, self).__init__()    
-    
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getAllPositions()
-        print('position',data)
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}
-
-
-########################################################################
-class Contract(Resource):
-    """合约"""
-
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Contract, self).__init__()    
-    
-
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getAllContracts()
-        print('Contract',data)
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}        
-
-
-########################################################################
-class Log(Resource):
-    """日志"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Log, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getLog()
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}   
-
-
-########################################################################
-class Error(Resource):
-    """错误"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        
-        super(Error, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def get(self):
-        """查询"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        data = me.getError()
-        l = [o.__dict__ for o in data]
-        return {'result_code':'success','data':l}
-
-
-########################################################################
-class Tick(Resource):
-    """行情"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('vtSymbol')
-        self.parser.add_argument('token')
-        super(Tick, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def post(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-
-        vtSymbol = args['vtSymbol']
-
-        contract = me.getContract(vtSymbol)
-        if not contract:
-            return {'result_code':'error','message':'contract error'}
-
-        req = VtSubscribeReq()
-        req.symbol = contract.symbol
-        req.exchange = contract.exchange
-        req.vtSymbol = contract.vtSymbol
-        
-        me.subscribe(req, contract.gatewayName)
-        return {'result_code':'success','data':''}
-    
-
-########################################################################
-class CtaStrategyInit(Resource):
-    """初始化策略"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyInit, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def post(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        name = args['name']
-        
         engine = me.getApp('CtaStrategy')
         if not name:
             engine.initAll()
         else:
             engine.initStrategy(name)
-        return {'result_code':'success','data':''}
+        return web.json_response({'result_code': 'success', 'data': ''})
 
 
-########################################################################
-class CtaStrategyStart(Resource):
-    """启动策略"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyStart, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def post(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
+async def CtaStrategyStart(request):
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        name = args['name']
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        name = data['name']
+
         engine = me.getApp('CtaStrategy')
         if not name:
             engine.startAll()
         else:
             engine.startStrategy(name)
-        return {'result_code':'success','data':''}
+        return web.json_response({'result_code': 'success', 'data': ''})
 
 
-########################################################################
-class CtaStrategyStop(Resource):
-    """停止策略"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyStop, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def post(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
+async def CtaStrategyStop(request):
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        name = args['name']
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        name = data['name']
+
         engine = me.getApp('CtaStrategy')
         if not name:
             engine.stopAll()
         else:
             engine.stopStrategy(name)
-        return {'result_code':'success','data':''}
+        return web.json_response({'result_code': 'success', 'data': ''})
 
 
-class CtaStrategyRestore(Resource):
-    """恢复策略"""
-
-    # ----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyRestore, self).__init__()
-
-        # ----------------------------------------------------------------------
-
-    def post(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
+async def CtaStrategyRestore(request):
+    if request.method == "POST":
+        data = request.content
+        data = json.loads(data._buffer[0])
+        token = data.get('token', None)
         if token != TOKEN:
-            return {'result_code': 'error', 'message': 'token error'}
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
 
-        name = args['name']
+        name = data['name']
 
         engine = me.getApp('CtaStrategy')
         engine.restoreStrategy(name)
-        return {'result_code': 'success', 'data': ''}
+        return web.json_response({'result_code': 'success', 'data': ''})
 
 
-########################################################################
-class CtaStrategyName(Resource):
-    """»ñÈ¡²ßÂÔÃû"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """³õÊ¼»¯"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        super(CtaStrategyName, self).__init__()        
-    
-    #----------------------------------------------------------------------
-    def get(self):
-        """»ñÈ¡²ßÂÔÃû""" 
-        args = self.parser.parse_args()
-        token = args['token']
+async def CtaStrategyParam(request):
+    if request.method == "GET":
+        token = request.query['token']
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        engine = me.getApp('CtaStrategy')
-        l = engine.getStrategyNames()
-        return {'result_code':'success','data':l}
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
 
+        name = request.query['name']
 
-########################################################################
-class CtaStrategyLoad(Resource):
-    """加载策略"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('token')
-        super(CtaStrategyLoad, self).__init__()        
-    
-    #----------------------------------------------------------------------
-    def post(self):
-        """订阅""" 
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        engine = me.getApp('CtaStrategy')
-        engine.loadSetting()
-        l = engine.getStrategyNames()
-        return {'result_code':'success','data':l}
-
-
-########################################################################
-class CtaStrategyParam(Resource):
-    """查询策略参数"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyParam, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def get(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
-        if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        name = args['name']
-        
         engine = me.getApp('CtaStrategy')
         l = engine.getStrategyParam(name)
-        return {'result_code':'success','data':l}
+        return web.json_response({'result_code': 'success', 'data': l})
 
 
-########################################################################
-class CtaStrategyVar(Resource):
-    """查询策略变量"""
-    
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """初始化"""
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('name')
-        self.parser.add_argument('token')
-        super(CtaStrategyVar, self).__init__()    
-
-    #----------------------------------------------------------------------
-    def get(self):
-        """订阅"""
-        args = self.parser.parse_args()
-        token = args['token']
+async def CtaStrategyVar(request):
+    if request.method == "GET":
+        token = request.query['token']
         if token != TOKEN:
-            return {'result_code':'error','message':'token error'}
-        
-        name = args['name']
-        
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
+
+        name = request.query['name']
+
         engine = me.getApp('CtaStrategy')
         l = engine.getStrategyVar(name)
-        return {'result_code':'success','data':l}
-
-      
-########################################################################
-@app.route('/')
-def index_html():
-    """首页"""
-    return send_file('./templates/index.html')
+        return web.json_response({'result_code': 'success', 'data': l})
 
 
-# 注册资源
-api.add_resource(Token, '/token')
-api.add_resource(Gateway, '/gateway')
-api.add_resource(Order, '/order')
-api.add_resource(Trade, '/trades')
-api.add_resource(Account, '/account')
-api.add_resource(Position, '/position')
-api.add_resource(Contract, '/contract')
-api.add_resource(Log, '/log')
-api.add_resource(Error, '/error')
-api.add_resource(Tick, '/tick')
+async def CtaStrategyName(request):
+    if request.method == "GET":
+        token = request.query['token']
+        if token != TOKEN:
+            return web.json_response({'result_code': 'error', 'message': 'token error'})
 
-api.add_resource(CtaStrategyLoad, '/ctastrategy/load')
-api.add_resource(CtaStrategyInit, '/ctastrategy/init')
-api.add_resource(CtaStrategyStart, '/ctastrategy/start')
-api.add_resource(CtaStrategyStop, '/ctastrategy/stop')
-api.add_resource(CtaStrategyRestore, '/ctastrategy/restore')
-api.add_resource(CtaStrategyParam, '/ctastrategy/param')
-api.add_resource(CtaStrategyVar, '/ctastrategy/var')
-api.add_resource(CtaStrategyName, '/ctastrategy/name')
+        engine = me.getApp('CtaStrategy')
+        l = engine.getStrategyNames()
+        return web.json_response({'result_code': 'success', 'data': l})
 
 
-# SocketIO
-#----------------------------------------------------------------------
+@aiohttp_jinja2.template('index.html')
+async def Index(request):
+    with open('./templates/index.html',encoding='utf-8') as f:
+        return web.Response(text=f.read(), content_type='text/html')
+
+
+app.router.add_get('/', Index)
+app.router.add_get('/token', Token)
+app.router.add_get('/gateway', Gateway)
+app.router.add_post('/gateway', Gateway)
+app.router.add_get('/contract', Contract)
+app.router.add_get('/account', Account)
+app.router.add_get('/position', Position)
+app.router.add_get('/log', Log)
+app.router.add_get('/error', Error)
+app.router.add_post('/tick', Tick)
+app.router.add_get('/trades', Trade)
+app.router.add_get('/order', Order)
+app.router.add_post('/order', Order)
+app.router.add_delete('/order', Order)
+app.router.add_static('/static/', path=str('./static'), name='static')
+
+app.router.add_post('/ctastrategy/load', CtaStrategyLoad)
+app.router.add_post('/ctastrategy/init', CtaStrategyInit)
+app.router.add_post('/ctastrategy/start', CtaStrategyStart)
+app.router.add_post('/ctastrategy/stop', CtaStrategyStop)
+app.router.add_post('/ctastrategy/restore', CtaStrategyRestore)
+app.router.add_get('/ctastrategy/param', CtaStrategyParam)
+app.router.add_get('/ctastrategy/var', CtaStrategyVar)
+app.router.add_get('/ctastrategy/name', CtaStrategyName)
+
+
+# 处理事件
 def handleEvent(event):
     """处理事件"""
-    eventType = event.type_
-
-    eventData = event.dict_['data']
-
-    if not isinstance(eventData, dict):
-        eventData = eventData.__dict__
-
-    if eventType == 'eTick.':
-        del eventData['datetime']
-
-    socketio.emit(eventType, eventData)
+    q.put(event)
 
 
 ee.register(EVENT_TICK, handleEvent)
@@ -697,17 +409,29 @@ ee.register(EVENT_LOG, handleEvent)
 ee.register(EVENT_ERROR, handleEvent)
 ee.register(EVENT_CTA_LOG, handleEvent)
 ee.register(EVENT_CTA_STRATEGY, handleEvent)
-    
 
-#----------------------------------------------------------------------
+
+async def background_task():
+    """Example of how to send server generated events to clients."""
+    while True:
+        if not q.empty():
+            event = q.get()
+            eventType = event.type_
+            eventData = event.dict_['data']
+            if not isinstance(eventData, dict):
+                eventData = eventData.__dict__
+            if eventType == 'eTick.':
+                # print(eventData)
+                del eventData['datetime']
+            await sio.emit(eventType, eventData)
+        await sio.sleep(0.01)
+
+
+# ----------------------------------------------------------------------
 def run():
-    """启动Web服务"""
-    socketio.run(app, 
-                 debug=True,
-                #  host='0.0.0.0',
-                 host= '127.0.0.1',
-                 port=5000,
-                 use_reloader=False)
+    aiohttp_jinja2.setup(app, loader=jinja2.FileSystemLoader('./templates'))
+    sio.start_background_task(background_task)
+    web.run_app(app)
 
 
 if __name__ == '__main__':

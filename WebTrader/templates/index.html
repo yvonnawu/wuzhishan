@@ -3,8 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <script src="socket.io.slim.js"></script>
-    <link href="index.css" rel="stylesheet">
+    <script src="https://cdn.bootcss.com/socket.io/2.0.4/socket.io.slim.js"></script>
+    <link href="https://cdn.bootcss.com/element-ui/2.0.11/theme-chalk/index.css" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="/static/css/style.css">
 </head>
 
@@ -167,7 +167,7 @@
                                             </el-table-column>
                                             <el-table-column sortable width="80" prop="status" label="委托状态">
                                             </el-table-column>
-                                            <el-table-column sortable prop="address" label="委托时间">
+                                            <el-table-column sortable prop="orderTime" label="委托时间">
                                             </el-table-column>
                                             <el-table-column sortable prop="cancelTime" label="撤销时间">
                                             </el-table-column>
@@ -449,7 +449,7 @@ new Vue({
         gToken(username, password) {
             const that = this;
             that.loading.token = true;
-            axios.get(host + '/token?username=' + username + '&password=' + password)
+            axios.get(host + 'token?username=' + username + '&password=' + password)
                 .then(function(res) {
                     that.loading.token = false;
                     if (res.status == 200 && res.data.result_code == "success") {
@@ -502,7 +502,7 @@ new Vue({
                     break;
             }
 
-            axios.post(host + "/ctastrategy/" + type, {
+            axios.post(host + "ctastrategy/" + type, {
                     name: name,
                     token: this.config.token
                 })
@@ -547,7 +547,7 @@ new Vue({
             const that = this;
             let strategy = {};
             that.loading.strategy = true;
-            axios.post(host + '/ctastrategy/load', {
+            axios.post(host + 'ctastrategy/load', {
                     token: this.config.token
                 })
                 .then(res => {
@@ -578,7 +578,7 @@ new Vue({
 
             const that = this,
                 _var = new Object();
-            axios.get(host + "/ctastrategy/var?name=" + name + "&token=" + this.config.token)
+            axios.get(host + "ctastrategy/var?name=" + name + "&token=" + this.config.token)
                 .then(res => {
                     if (res.data.result_code !== "success") {
                         that.$notify({ title: '警告', message: 'ctastrategy/var接口报错', type: 'warning', duration: 0, });
@@ -628,7 +628,7 @@ new Vue({
             }
 
             const that = this;
-            axios.get(host + "/ctastrategy/param?name=" + name + "&token=" + this.config.token)
+            axios.get(host + "ctastrategy/param?name=" + name + "&token=" + this.config.token)
                 .then(res => {
                     if (res.data.result_code !== "success") {
                         that.$notify({ title: '警告', message: 'ctastrategy/param接口报错', type: 'warning', duration: 0, });
@@ -668,7 +668,7 @@ new Vue({
             }
 
             function gInfo(apiName, token) {
-                axios.get(host + "/" + apiName + "?token=" + token)
+                axios.get(host + "" + apiName + "?token=" + token)
                     .then(res => {
                         if (res.data.result_code == "success") {
                             if (apiName == "order") {
@@ -734,7 +734,7 @@ new Vue({
             this.loading.order = true;
 
             const that = this;
-            axios.post(host + '/order', {
+            axios.post(host + 'order', {
                     vtSymbol: this.form.vtSymbol,
                     price: this.form.lastPrice,
                     volume: this.form.volume,
@@ -783,7 +783,7 @@ new Vue({
                 });
             } else {
                 this.loading.subScribe = true;
-                axios.post(host + "/tick", {
+                axios.post(host + "tick", {
                         vtSymbol: _vtSymbol,
                         token: this.config.token
                     })
@@ -818,7 +818,7 @@ new Vue({
             console.log(e.vtOrderID);
             let vtOrderID = e.vtOrderID,
                 that = this;
-            axios.delete(host + "/order?vtOrderID=" + vtOrderID + "&token=" + this.config.token)
+            axios.delete(host + "order?vtOrderID=" + vtOrderID + "&token=" + this.config.token)
                 .then(res => {
                     if (res.data.result_code == "success") {
                         that.$message({ message: '撤单已提交', type: 'success' });
@@ -844,7 +844,7 @@ new Vue({
             console.log(e.vtOrderID);
             let vtOrderID = "",
                 that = this;
-            axios.delete(host + "/order?vtOrderID=" + vtOrderID + "&token=" + this.config.token)
+            axios.delete(host + "order?vtOrderID=" + vtOrderID + "&token=" + this.config.token)
                 .then(res => {
                     if (res.data.result_code == "success") {
                         that.$message({ message: '撤单已提交', type: 'success' });
@@ -882,7 +882,7 @@ new Vue({
             }
 
             let that = this;
-            axios.get(host + "/ctastrategy/name?token=" + this.config.token)
+            axios.get(host + "ctastrategy/name?token=" + this.config.token)
                 .then(res => {
                     let nameArray = res.data.data;
                     nameArray.forEach(function(item) {
@@ -911,7 +911,7 @@ new Vue({
 
             const that = this;
             if (that.contract.length == 0) {
-                axios.get(host + "/contract?token=" + this.config.token)
+                axios.get(host + "contract?token=" + this.config.token)
                     .then(res => {
                         that.loading.contract = false;
                         if (res.data.result_code == "success") {
@@ -928,7 +928,7 @@ new Vue({
         },
         gGateway() {
             const that = this;
-            axios.post(host + '/gateway', {
+            axios.post(host + 'gateway', {
                     token: this.config.token,
                     gatewayName: 'CTP'
                 })
