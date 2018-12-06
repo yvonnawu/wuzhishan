@@ -478,7 +478,7 @@ class SymbolBarManager(Logger, BarUtilsMixin):
                 bars_to_push[freq] = bar_finished
         self.push_bars_dct(bars_to_push)
         for freq in list(self._high_freqs.keys()) + list(self._low_freqs.keys()):
-            self._update_uncomplete_bar(freq, bar.datetime)
+            self._update_uncomplete_bar(freq, bar.datetime + timedelta(minutes=1))
 
     def get_array_manager(self, freq):
         if freq not in self._am:
