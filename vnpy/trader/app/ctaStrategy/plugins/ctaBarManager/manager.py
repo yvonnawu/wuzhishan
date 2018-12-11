@@ -11,13 +11,13 @@ from weakref import proxy
 
 import numpy as np
 from dateutil.parser import parse
-from vnpy.trader.vtObject import VtBarData
 from vnpy.trader.vtConstant import VN_SEPARATOR
 from vnpy.trader.utils import Logger
 from vnpy.trader.utils.datetime import *
 from vnpy.trader.utils.datetime import _freq_re_str
 
 from .arraymanager import ArrayManager
+from .utils import BarUtilsMixin, BarTimer
 from ..ctaPlugin import CtaEnginePlugin, CtaEngineWithPlugins, CtaTemplateWithPlugins
 from ...ctaBacktesting import BacktestingEngine as OriginBacktestingEngine
 from ...ctaTemplate import CtaTemplate as OriginCtaTemplate
@@ -25,135 +25,6 @@ from ...ctaBase import ENGINETYPE_BACKTESTING, ENGINETYPE_TRADING
 
 _on_bar_re = re.compile("^on%sBar$" % _freq_re_str)
 logger = Logger()
-
-class BarUtilsMixin(object):
-    def align_datetime(self, dt, freq):
-        return align_datetime(dt, freq)
-
-    def merge_bar_with_bar(self, bar1, bar2):
-        bar1.high = max(bar1.high, bar2.high)
-        bar1.low = min(bar1.low, bar2.low)
-        bar1.close = bar2.close
-        bar1.volume += bar2.volume
-        bar1.openInterest += bar2.openInterest
-        return bar1
-
-    def merge_bar_with_tick(self, bar, tick):
-        bar.high = max(bar.high, tick.lastPrice)
-        bar.low = min(bar.low, tick.lastPrice)
-        bar.close = tick.lastPrice
-        bar.volume += tick.volume
-        bar.openInterest += tick.openInterest
-        return bar
-
-    def align_bar(self, bar, freq):
-        if freq is not None:
-            return self.override_bar_with_datetime(bar, self.align_datetime(bar.datetime, freq))
-        return bar
-    
-    def override_bar_with_datetime(self, bar, dt):
-        bar.datetime = dt
-        s = bar.datetime.strftime('%Y%m%d%H:%M:%S.%f')
-        bar.date = s[:8]
-        bar.time = s[8:]
-        return bar
-
-    def override_bar_with_bar(self, bar1, bar2, freq=None):
-        bar1.open = bar2.open
-        bar1.high = bar2.high
-        bar1.low = bar2.low
-        bar1.close = bar2.close
-        bar1.volume = bar2.volume
-        bar1.openInterest = bar2.openInterest
-        bar1.datetime = bar2.datetime
-        bar1.date = bar2.date
-        bar1.time = bar2.time
-        return self.align_bar(bar1, freq)
-        
-    def override_bar_with_tick(self, bar, tick, freq=None):
-        bar.open = tick.lastPrice
-        bar.high = tick.lastPrice
-        bar.low = tick.lastPrice
-        bar.close = tick.lastPrice
-        bar.volume = tick.volume
-        bar.openInterest = tick.openInterest
-        bar.datetime = tick.datetime
-        bar.date = tick.date
-        bar.time = tick.time
-        return self.align_bar(bar, freq)
-
-    def new_bar_from_tick(self, tick, freq=None):
-        bar = VtBarData()
-        bar.vtSymbol = tick.vtSymbol
-        bar.symbol = tick.symbol
-        bar.exchange = tick.exchange
-        bar.gatewayName = tick.gatewayName
-        return self.override_bar_with_tick(bar, tick, freq=freq)
-
-    def new_bar_from_bar(self, bar, freq=None):
-        bar2 = VtBarData()
-        bar2.vtSymbol = bar.vtSymbol
-        bar2.symbol = bar.symbol
-        bar2.exchange = bar.exchange
-        bar2.gatewayName = bar.gatewayName
-        return self.override_bar_with_bar(bar2, bar, freq=freq)
-
-
-class BarTimer(Logger, BarUtilsMixin):
-    def __init__(self, parent, symbol, freq):
-        self._parent = proxy(parent)
-        self._symbol = symbol
-        self._freq = freq
-        self._freq_mul, self._freq_unit = split_freq(freq) # frequency unit and multiplier
-        self._freq_seconds = freq2seconds(freq)
-        self._is_backtesting = None
-        self._func_map = {
-            "s": self._is_new_bar_s,
-            "m": self._is_new_bar_m,
-            "h": self._is_new_bar_h,
-        }
-        self._func = self._func_map.get(self._freq_unit, None)
-        self.init()
-
-    def init(self):
-        self._ts_cursor = None
-
-    def is_backtesting(self):
-        if self._is_backtesting is None:
-            self._is_backtesting = self._parent.is_backtesting()
-        return self._is_backtesting
-
-    def get_current_dt(self, dt):
-        if self.is_backtesting() and self._freq_unit != "s": 
-            return dt.replace(second=0, microsecond=0)
-        else: # NOTE: update timestamp cursor according to timestamp
-            unit_s = self._freq_seconds
-            if self._ts_cursor is None:
-                self._ts_cursor = dt2ts(self.align_datetime(dt, self._freq))
-            last_ts = self._ts_cursor
-            ts = dt2ts(dt)
-            dts = ts - last_ts
-            if dts >= unit_s:
-                self._ts_cursor = last_ts + dts // unit_s * unit_s
-            return ts2dt(self._ts_cursor)
-    
-    def _is_new_bar_s(self, bar, dt):
-        return dt != bar.datetime
-
-    def _is_new_bar_m(self, bar, dt):
-        return dt.minute % self._freq_mul == 0 and bar.datetime != dt
-
-    def _is_new_bar_h(self, bar, dt):
-        return dt.minute == 0 and dt.datetime.hour % self._freq_mul == 0
-
-    def is_new_bar(self, bar, dt):
-        if self._func:
-            return self._func(bar, dt)
-        else:   # more than a day
-            # FIXME: Weekends is not token into consideration
-            unit_d = self._freq_seconds // (24 * 60 * 60)
-            delta_d = (dt.date() - bar.datetime.date()).days
-            return delta_d and delta_d >= unit_d
 
 
 class SymbolBarManager(Logger, BarUtilsMixin):
@@ -361,7 +232,8 @@ class SymbolBarManager(Logger, BarUtilsMixin):
                     else:
                         self.override_bar_with_bar(self._push_bars[freq], current_bar)
                     finished_bar = self._push_bars[freq]
-                    self._update_am_bar(self._am[freq], finished_bar, end_time=finished_bar.datetime + timedelta(seconds=freq2seconds(freq)))
+                    end_time = finished_bar.datetime + timedelta(seconds=freq2seconds(freq))
+                    self._update_am_bar(self._am[freq], finished_bar, end_time=end_time)
                 self.override_bar_with_tick(current_bar, tick)
                 self.override_bar_with_datetime(current_bar, dt)
             elif current_bar.datetime <= dt:
@@ -395,7 +267,8 @@ class SymbolBarManager(Logger, BarUtilsMixin):
                     else:
                         self.override_bar_with_bar(self._push_bars[freq], current_bar)
                     finished_bar = self._push_bars[freq]
-                    self._update_am_bar(self._am[freq], finished_bar, end_time=finished_bar.datetime + timedelta(seconds=freq2seconds(freq)))
+                    end_time = finished_bar.datetime + timedelta(seconds=freq2seconds(freq))
+                    self._update_am_bar(self._am[freq], finished_bar, end_time=end_time)
                 self.override_bar_with_bar(current_bar, bar)
             elif current_bar.datetime <= dt:
                 self.merge_bar_with_bar(current_bar, bar)
@@ -478,7 +351,8 @@ class SymbolBarManager(Logger, BarUtilsMixin):
                 bars_to_push[freq] = bar_finished
         self.push_bars_dct(bars_to_push)
         for freq in list(self._high_freqs.keys()) + list(self._low_freqs.keys()):
-            self._update_uncomplete_bar(freq, bar.datetime + timedelta(minutes=1))
+            if freq != "1m":
+                self._update_uncomplete_bar(freq, bar.datetime + timedelta(minutes=1))
 
     def get_array_manager(self, freq):
         if freq not in self._am:
