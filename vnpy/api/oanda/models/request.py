@@ -10,6 +10,9 @@ __all__ = [
 ]
 
 
+VNPY_CLIENT_TAG = "vnpy"
+VNPY_CLIENT_COMMENT = "Sent by vnpy."
+
 class OandaRequest(OandaData):
     KEYS = []
  
@@ -31,6 +34,8 @@ class OandaRequest(OandaData):
 class OandaOrderRequest(OandaRequest):
     KEYS = ["type", "instrument", "units", "timeInForce", "positionFill", "clientExtensions",
         "tradeClientExtensions"]
+    CLIENT_TAG = VNPY_CLIENT_TAG
+    CLIENT_COMMENT = VNPY_CLIENT_COMMENT
 
     def __init__(self, type=None):
         self.type = type
@@ -44,13 +49,13 @@ class OandaOrderRequest(OandaRequest):
     def set_client_order_id(self, order_id):
         self.clientExtensions = OandaClientExtensions.from_dict({
             "id": order_id,
-            "tag": "vnpy",
-            "comment": "Sent by vnpy.",
+            "tag": self.CLIENT_TAG,
+            "comment": self.CLIENT_COMMENT,
         })
         self.tradeClientExtensions = OandaClientExtensions.from_dict({
             "id": order_id,
-            "tag": "vnpy",
-            "comment": "Sent by vnpy."
+            "tag": self.CLIENT_TAG,
+            "comment": self.CLIENT_COMMENT,
         })
 
     @classmethod
@@ -108,6 +113,15 @@ class OandaOrderSpecifier(OandaRequest):
             obj.clientOrderID = req.orderID
         return obj
 
+    @classmethod
+    def from_id(cls, id_):
+        obj = cls()
+        if id_.startwith("@"):
+            obj.clientOrderID = id_[1:]
+        else:
+            obj.id = id_
+        return obj
+
     def to_url(self):
         if self.orderID:
             return self.orderID
@@ -118,7 +132,8 @@ class OandaOrderSpecifier(OandaRequest):
 
 class OandaOrderQueryRequest(OandaRequest):
     KEYS = ["ids", "instrument", "count", "beforeID"]
-    
+    MAX_COUNT = 500
+
     def __init__(self):
         self.ids = None
         self.state = OandaOrderState.ALL.value
@@ -182,3 +197,29 @@ class OandaInstrumentsQueryRequest(OandaRequest):
             return "?instruments=%s" % ",".join(self.instruments)
         else:
             return ""
+
+
+class OandaPositionCloseRequest(OandaRequest):
+    KEYS = ["longUnits", "longClientExtensions", "shortUnits", "shortClientExtensions"]
+    CLIENT_TAG = VNPY_CLIENT_TAG
+    CLIENT_COMMENT = VNPY_CLIENT_COMMENT
+    
+    def __init__(self):
+        self.longUnits = "ALL"
+        self.longClientExtensions = None
+        self.shortUnits = "ALL"
+        self.shortClientExtensions = None
+
+    def set_long_client_order_id(self, order_id):
+        self.longClientExtensions = OandaClientExtensions.from_dict({
+            "id": order_id,
+            "tag": self.CLIENT_TAG,
+            "comment": self.CLIENT_COMMENT,
+        })
+
+    def set_short_client_order_id(self, order_id):
+        self.shortClientExtensions = OandaClientExtensions.from_dict({
+            "id": order_id,
+            "tag": self.CLIENT_TAG,
+            "comment": self.CLIENT_COMMENT,
+        })

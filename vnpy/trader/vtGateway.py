@@ -147,11 +147,41 @@ class VtGateway(object):
         """关闭"""
         pass
     
+    def cancelAll(self, symbols=None, orders=None):
+        """撤销所有挂单,若交易所支持批量撤单,使用批量撤单接口
+        
+        Parameters
+        ----------
+        symbol : str, optional
+            用逗号隔开的多个合约代码,表示只撤销这些合约的挂单(默认为None,表示撤销所有合约的所有挂单)
+        orders : str, optional
+            用逗号隔开的多个vtOrderID.
+            若为None,先从交易所先查询所有未完成订单作为待撤销订单列表进行撤单;
+            若不为None,则对给出的对应订单中和symbol参数相匹配的订单作为待撤销订单列表进行撤单。
+        
+        Return
+        ------
+        vtOrderIDs: list of str
+        包含本次所有撤销的订单ID的列表
+        """
+        pass
+    
+    def closeAll(self, symbols, direction=None):
+        """以市价单的方式全平某个合约的当前仓位,若交易所支持批量下单,使用批量下单接口
+        
+        Parameters
+        ----------
+        symbols : str
+            所要平仓的合约代码,多个合约代码用逗号分隔开。
+        direction : str, optional
+            所要平仓的方向，(默认为None，即在两个方向上都进行平仓，否则只在给出的方向上进行平仓)
 
-    
-    
-    
-
+        Return
+        ------
+        vtOrderIDs: list of str
+        包含平仓操作发送的所有订单ID的列表
+        """
+        pass
     
     
     

@@ -6,7 +6,8 @@ from vnpy.api.oanda.models.transaction import *
 __all__ = ["OandaOrderCreatedResponse", "OandaOrderRejectedResponse", "OandaOrderCancelledResponse",
      "OandaOrderCancelRejectedResponse", "OandaInstrumentsQueryResponse", "OandaAccountSummaryQueryResponse",
      "OandaOrderQueryResponse", "OandaPositionsQueryResponse", "OandaPositionQueryResponse",
-     "OandaTransactionsQueryResponse", "OandaCandlesQueryResponse"]
+     "OandaTransactionsQueryResponse", "OandaCandlesQueryResponse", "OandaPositionClose200Response",
+     "OandaPositionClose404Response", ]
 
 def union_vnpy_data_dicts(dcts):
     keys = reduce(lambda x, y: x.union(set(y)), [dct.keys() for dct in dcts], set())
@@ -246,3 +247,52 @@ class OandaCandlesQueryResponse(OandaData):
         if candles and (not candles[-1].complete) and drop_last_uncomplete:
             candles = candles[:-1]
         return [candlestick.to_vnpy_bar() for candlestick in candles]
+
+
+class OandaPositionClose200Response(Oanda):
+    KEYS = ["longOrderCreateTransaction", "longOrderFillTransaction", "longOrderCancelTransaction",
+        "shortOrderCreateTransaction", "shortOrderFillTransaction", "shortOrderCancelTransaction",
+        "relatedTransactionIDs", "lastTransactionID"]
+
+    def __init__(self):
+        self.longOrderCreateTransaction = None
+        self.longOrderFillTransaction = None
+        self.longOrderCancelTransaction = None
+        self.shortOrderCreateTransaction = None
+        self.shortOrderFillTransaction = None
+        self.shortOrderCancelTransaction = None
+        self.relatedTransactionIDs = None
+        self.lastTransactionID = None
+
+    @classmethod
+    def from_dict(cls, dct):
+        obj = cls()
+        obj.__dict__ = super(OandaPositionClose200Response, cls).from_dict(dct).__dict__
+        obj.longOrderCreateTransaction = obj.longOrderCreateTransaction and OandaMarketOrderTransaction.from_dict(obj.longOrderCreateTransaction)
+        obj.longOrderFillTransaction = obj.longOrderFillTransaction and OandaOrderFillTransaction.from_dict(obj.longOrderFillTransaction)
+        obj.longOrderCancelTransaction = obj.longOrderCancelTransaction and OandaOrderCancelTransaction.from_dict(obj.longOrderCancelTransaction)
+        obj.shortOrderCreateTransaction = obj.shortOrderCreateTransaction and OandaMarketOrderTransaction.from_dict(obj.shortOrderCreateTransaction)
+        obj.shortOrderFillTransaction = obj.shortOrderFillTransaction and OandaOrderFillTransaction.from_dcit(obj.shortOrderFillTransaction)
+        obj.shortOrderCancelTransaction = obj.shortOrderCancelTransaction and OandaOrderCancelTransaction.from_dict(obj.shortOrderCacnelTransaction)
+        return obj
+
+
+class OandaPositionClose404Response(Oanda):
+    KEYS = ["longOrderRejectTransaction", "shortOrderRejectTransaction", "relatedTransactionIDs", 
+        "lastTransactionID", "errorCode", "errorMessage"]
+
+    def __init__(self):
+        self.longOrderRejectTransaction = None
+        self.shortOrderRejectTransaction = None
+        self.relatedTransactionIDs = None
+        self.lastTransactionID = None
+        self.errorCode = None
+        self.errorMessage = None
+
+    @classmethod
+    def from_dict(cls, dct):
+        obj = cls()
+        obj.__dict__ = super(OandaPositionClose200Response, cls).from_dict(dct).__dict__
+        obj.longOrderRejectTransaction = obj.longOrderRejectTransaction and OandaMarketOrderRejectTransaction.from_dict(obj.longOrderRejectTransaction)
+        obj.shortOrderRejectTransaction = obj.shortOrderRejectTransaction and OandaMarketOrderRejectTransaction.from_dict(obj.shortOrderRejectTransaction)
+        return obj

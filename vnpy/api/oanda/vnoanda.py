@@ -298,6 +298,16 @@ class OandaApi(Logger):
         }
         return self._request_and_handle(url, rep_map, account_id=account.id, block=block, push=push)
 
+    def close_position(self, instrument, req=None, account_id=None, block=False, push=None):
+        req = req or OandaPositionCloseRequest()
+        account = self.get_account(account_id)
+        url = (self.get_rest_host() + POSITION_CLOSE_ENDPOINT).format(accountID=account.id, instrument=instrument)
+        rep_map = {
+            200: OandaPositionClose200Response,
+            404: OandaPositionClose404Response,
+        }
+        return self._request_and_handle(url, rep_map, account_id=None, block=block, push=push)
+
     def query_raw_url(self, url, rep_map=None, data=None, method="GET", block=True, push=None):
         return self._request_and_handle(url, rep_map, account_id=account.id, method=method, data=data, block=block, push=push)
 

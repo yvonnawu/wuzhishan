@@ -11,11 +11,15 @@ from vnpy.trader.vtObject import VtOrderData, VtPositionData, VtTradeData, \
 from vnpy.trader.vtConstant import *
 from vnpy.api.oanda.vnoanda import OandaApi, OandaPracticeApi
 from vnpy.api.oanda.interface import AbstractOandaGateway
-from vnpy.api.oanda.const import OandaCandlesGranularity, OANDA_DATEFORMAT_RFC3339
+from vnpy.api.oanda.const import OandaCandlesGranularity, OANDA_DATEFORMAT_RFC3339, OandaOrderState
 from vnpy.api.oanda.models.request import OandaMarketOrderRequest, OandaLimitOrderRequest, OandaOrderSpecifier, \
-    OandaCandlesQueryRequest
+    OandaCandlesQueryRequest, OandaOrderQueryRequest, OandaOrderSpecifier, OandaPositionCloseRequest
 
-
+def parse_csv(obj):
+    if isinstance(obj, str):
+        return obj.split(",")
+    else:
+        return obj
 
 @lru_cache(maxsize=1024)
 def map_frequency(freq):
@@ -155,8 +159,9 @@ class OandaGateway(VtGateway, AbstractOandaGateway):
         self.writeLog("查询所有订单|(测试)")
 
     def getClientOrderID(self, id, clientExtensions):
-        if clientExtensions is not None:
-            return clientExtensions.id
+        oid = self.api.get_order_specifier(id, clientExtension)
+        if oid and oid.startwith("@"):
+            return oid[1:]
         else:
             return None
 
@@ -241,13 +246,19 @@ class VnOandaApi(OandaApi):
     def on_close(self):
         self.writeLog("oanda api 已退出")
 
+    def get_client_order_id(self):
+        return "-".join([self.client_dt, str(self.orderID)])
+
+    def next_client_order_id(self):
+        self.orderID += 1
+        return self.get_client_order_id()
+
     def sendOrder(self, orderReq):
         if orderReq.priceType == PRICETYPE_MARKETPRICE:
             req = OandaMarketOrderRequest.from_vnpy(orderReq)
         elif orderReq.priceType == PRICETYPE_LIMITPRICE:
             req = OandaLimitOrderRequest.from_vnpy(orderReq)
-        self.orderID += 1
-        clOrderId = "-".join([self.client_dt, str(self.orderID)])
+        clOrderId = self.next_client_order_id()
         req.set_client_order_id(clOrderId)
         self.send_order(req)
         return VN_SEPARATOR.join([clOrderId, self.gateway.gatewayName])
@@ -270,6 +281,74 @@ class VnOandaApi(OandaApi):
             req.to = self.current_datetime.strftime(OANDA_DATEFORMAT_RFC3339)
         df = self.qry_candles(req).to_dataframe()
         return df
+
+    def get_order_specifier(self, id, clientExtensions):
+        if clientExtensions is not None:
+            return "@" + clientExtensions.id
+        else:
+            return id
+
+    def cancelAll(self, symbols=None, orders=None):
+        symbols = parse_csv(symbols)
+        if not orders:
+            if symbols and len(symbols) <= 3: # limit request number less than 3
+                orders = []
+                # TODO: using async request and wait future group.
+                for symbol in symbols:
+                    req = OandaOrderQueryRequest()
+                    req.state = OandaOrderState.PENDGING.value
+                    req.count = req.MAX_COUNT
+                    req.instrument = symbol
+                    rep = self.qry_orders(req)
+                    orders += [self.get_order_specifier(order.id, order.clientExtensions) for order in rep.orders]
+            else:
+                req = OandaOrderQueryRequest()
+                req.state = OandaOrderState.PENDGING.value
+                req.count = req.MAX_COUNT
+                rep = self.qry_order(req)
+                if not symbols:
+                    orders = [self.get_order_specifier(order.id, order.clientExtensions) for order in rep.orders]
+                else:
+                    s_set = set(symbols)
+                    orders = [self.get_order_specifier(order.id, order.clientExtensions) for order in rep.orders if order.instrument in s_set]
+        orders = parse_csv(orders)
+        ret = []
+        for oid in orders:
+            req = OandaOrderSpecifier.from_id(oid)
+            if req.clientOrderID:
+                ret.append(req.clientOrderID)
+            self.cancel_order(req)
+        return ret
+
+    def closePosition(self, symbol, direction=None):
+        req = OandaPositionCloseRequest()
+        oids = []
+        if direction == DIRECTION_LONG:
+            req.shortUnits = None
+            oid = self.next_client_order_id()
+            req.set_long_client_order_id(oid)
+            oids.append[oid]
+        elif direction == DIRECTION_SHORT:
+            req.longUnits = None
+            oid = self.next_client_order_id()
+            req.set_short_client_order_id(oid)
+            oids.append[oid]
+        else:
+            oid = self.next_client_order_id()
+            req.set_long_client_order_id(oid)
+            oids.append[oid]
+            oid = self.next_client_order_id()
+            req.set_short_client_order_id(oid)
+            oids.append[oid]
+        self.close_position(symbol, req)
+        return oids
+
+    def closeAll(self, symbols, direction=None):
+        symbols = parse_csv(symbols)
+        oids = []
+        for symbol in symbols:
+            oids.extends(self.closePosition(symbol, direction=direction))
+        return oids
 
 
 class VnOandaPracticeApi(VnOandaApi):
