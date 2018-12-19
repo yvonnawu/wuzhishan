@@ -370,3 +370,4 @@ class VtCancelOrderReq(object):
         self.frontID = EMPTY_STRING             # 前置机号
         self.sessionID = EMPTY_STRING           # 会话号
    
+from .vtObjectExtra import *

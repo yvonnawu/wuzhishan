@@ -8,7 +8,6 @@ from vnpy.trader.vtEvent import *
 from vnpy.trader.vtConstant import *
 from vnpy.trader.vtObject import *
 
-
 ########################################################################
 class VtGateway(object):
     """交易接口"""
@@ -146,12 +145,66 @@ class VtGateway(object):
     def close(self):
         """关闭"""
         pass
-    
 
-    
-    
-    
+from functools import partial
+from copy import copy
+from concurrent.futures import Future
 
-    
-    
-    
+class ExtendedVtGateway(VtGateway):
+    @property
+    def now():
+        """由Gateway中传递的各种消息包含的交易所时间信息确定的最新时间"""
+        return None
+
+    def qryCandlesAsync(self, req, callback=None):
+        """异步获取Bar数据并调用回调函数"""
+        pass
+
+    def qryCandles(self, req, block=False, callback=None, timeout=30):
+        """ 查询Bar数据,可以选择阻塞和非阻塞两种模式
+        
+        Parameters
+        ----------
+        req : [type]
+            [description]
+        block : bool, optional
+            [description] (the default is False, which [default_description])
+        callback : [type], optional
+            [description] (the default is None, which [default_description])
+        timeout : int, optional
+            [description] (the default is 30, which [default_description])
+        
+        Returns
+        -------
+        [type]
+            [description]
+        """
+        def set_future_result(fut, candles):
+            fut.set_result(candles)
+        req = copy(req)
+        req.vtSymbol = VN_SEPARATOR.join([req.symbol, self.gatewayName])
+        if not block:
+            if callback:
+                self.qryCandlesAsync(req, callback=callback)
+            else:
+                self.qryCandlesAsync(req, callback=self.onQryCandles)
+        else:
+            # if you want to use block mode, callback of qryCandlesAsync must be execute in 
+            # other thread than event engine's thread.
+            fut = Future()
+            self.qryCandlesAsync(req, callback=partial(set_future_result, fut))
+            return fut.result(timeout=timeout) 
+
+    def onQryCandles(self, candles):
+        """查询"""
+        event1 = Event(type_=EVENT_CANDLES)
+        event1.dict_['data'] = candles
+        self.eventEngine.put(event1)
+        
+        # 特定合约代码的事件
+        event2 = Event(type_=EVENT_CANDLES + candles.meta.vtSymbol)
+        event2.dict_['data'] = candles
+        self.eventEngine.put(event2)  
+
+OrigVtGateway = VtGateway
+VtGateway = ExtendedGateway
