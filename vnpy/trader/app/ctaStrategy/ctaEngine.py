@@ -400,9 +400,6 @@ class CtaEngine(object):
             for strategy in l:
                 if strategy.trading:
                     self.callStrategyFunc(strategy, strategy.onTick, tick)
-                    if tick.datetime.second == 36 and tick.datetime.minute != self.minute_temp:
-                        self.minute_temp = tick.datetime.minute
-                        self.qryAllOrders(strategy.name)
                     
     #----------------------------------------------------------------------
     def processOrderEvent(self, event):
@@ -412,30 +409,29 @@ class CtaEngine(object):
         if vtOrderID in self.orderStrategyDict:
             strategy = self.orderStrategyDict[vtOrderID]
 
-            if 'eveningDict' in strategy.syncList:
-                if order.status == STATUS_CANCELLED:
-                    if order.direction == DIRECTION_LONG and order.offset == OFFSET_CLOSE:
-                        posName = order.vtSymbol + "_SHORT"
-                        strategy.eveningDict[posName] += order.totalVolume - order.tradedVolume
-                    elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_CLOSE:
-                        posName = order.vtSymbol + "_LONG"
-                        strategy.eveningDict[posName] += order.totalVolume - order.tradedVolume
+            if order.status == STATUS_CANCELLED:
+                if order.direction == DIRECTION_LONG and order.offset == OFFSET_CLOSE:
+                    posName = order.vtSymbol + "_SHORT"
+                    strategy.eveningDict[posName] += (order.totalVolume - order.tradedVolume)
+                elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_CLOSE:
+                    posName = order.vtSymbol + "_LONG"
+                    strategy.eveningDict[posName] += (order.totalVolume - order.tradedVolume)
 
-                elif order.status == STATUS_ALLTRADED or order.status == STATUS_PARTTRADED:
-                    if order.direction == DIRECTION_LONG and order.offset == OFFSET_OPEN:
-                        posName = order.vtSymbol + "_LONG"
-                        strategy.eveningDict[posName] += order.thisTradedVolume
-                    elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_OPEN:
-                        posName = order.vtSymbol + "_SHORT"
-                        strategy.eveningDict[posName] += order.thisTradedVolume
-                        
-                elif order.status == STATUS_NOTTRADED:
-                    if order.direction == DIRECTION_LONG and order.offset == OFFSET_CLOSE:
-                        posName = order.vtSymbol + "_SHORT"
-                        strategy.eveningDict[posName] -= order.totalVolume
-                    elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_CLOSE:
-                        posName = order.vtSymbol + "_LONG"
-                        strategy.eveningDict[posName] -= order.totalVolume
+            elif order.status == STATUS_ALLTRADED or order.status == STATUS_PARTTRADED:
+                if order.direction == DIRECTION_LONG and order.offset == OFFSET_OPEN:
+                    posName = order.vtSymbol + "_LONG"
+                    strategy.eveningDict[posName] += order.thisTradedVolume
+                elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_OPEN:
+                    posName = order.vtSymbol + "_SHORT"
+                    strategy.eveningDict[posName] += order.thisTradedVolume
+                    
+            elif order.status == STATUS_NOTTRADED:
+                if order.direction == DIRECTION_LONG and order.offset == OFFSET_CLOSE:
+                    posName = order.vtSymbol + "_SHORT"
+                    strategy.eveningDict[posName] -= order.totalVolume
+                elif order.direction == DIRECTION_SHORT and order.offset == OFFSET_CLOSE:
+                    posName = order.vtSymbol + "_LONG"
+                    strategy.eveningDict[posName] -= order.totalVolume
                 
 
             # 如果委托已经完成（拒单、撤销、全成），则从活动委托集合中移除
@@ -1030,8 +1026,7 @@ class CtaEngine(object):
         return histbar
 
     def initPosition(self,strategy):
-        for i in range(len(strategy.symbolList)):
-            symbol = strategy.symbolList[i]
+        for symbol in strategy.symbolList:
             if 'posDict' in strategy.syncList:
                 strategy.posDict[symbol+"_LONG"] = 0
                 strategy.posDict[symbol+"_SHORT"] = 0
@@ -1043,14 +1038,9 @@ class CtaEngine(object):
         for vtSymbol in strategy.symbolList:
             self.mainEngine.initPosition(vtSymbol)
 
-    def qryAllOrders(self,name):
-
-        if name in self.strategyDict:
-            strategy = self.strategyDict[name]
-            s = self.strategyOrderDict[name]
-            for symbol in strategy.symbolList:
-                self.mainEngine.qryAllOrders(symbol, -1, status = 1)
-                # self.writeCtaLog("ctaEngine对策略%s发出%s的挂单轮询请求，本地订单数量%s"%(name,symbol,len(list(s))))
+    def initOrders(self,strategy):
+        for vtSymbol in strategy.symbolList:
+            self.mainEngine.initOrders(vtSymbol)
 
     def restoreStrategy(self, name):
         """恢复策略"""

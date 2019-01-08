@@ -215,6 +215,9 @@ class CtpGateway(VtGateway):
         """查询持仓"""
         self.tdApi.qryPosition()
 
+    def qryOrder(self):
+        self.tdApi.qryOrder()
+
     #----------------------------------------------------------------------
     def close(self):
         """关闭"""
@@ -389,6 +392,7 @@ class CtpGateway(VtGateway):
     def initPosition(self,vtSymbol):
         self.qryPosition()
         self.qryAccount()
+        self.qryOrder()
 
     def qryInstrument(self):
         self.tdApi.restQryInstrument()
@@ -460,7 +464,7 @@ class CtpMdApi(MdApi):
     #----------------------------------------------------------------------
     def onRspUserLogin(self, data, error, n, last):
         """登陆回报"""
-        print(data,error,'登陆回报登陆回报登陆回报登陆回报')
+        print(data,error,'登陆回报')
         # 如果登录成功，推送日志信息
         if error['ErrorID'] == 0:
             self.loginStatus = True
@@ -689,7 +693,7 @@ class CtpTdApi(TdApi):
         self.posDict = {}
         self.symbolExchangeDict = {}        # 保存合约代码和交易所的印射关系
         self.symbolSizeDict = {}            # 保存合约代码和合约大小的印射关系
-        self.contractsList = []
+        self.contractsDict = {}
 
         self.requireAuthentication = False
 
@@ -924,6 +928,7 @@ class CtpTdApi(TdApi):
     #----------------------------------------------------------------------
     def onRspQryOrder(self, data, error, n, last):
         """"""
+        print(data)
         pass
 
     #----------------------------------------------------------------------
@@ -961,6 +966,7 @@ class CtpTdApi(TdApi):
 
         # 针对上期所持仓的今昨分条返回（有昨仓、无今仓），读取昨仓数据
         pos.ydPosition = 0
+        exchange = self.symbolExchangeDict.get(pos.symbol, EXCHANGE_UNKNOWN)
         if exchange == EXCHANGE_SHFE:
             if data['YdPosition'] and not data['TodayPosition']:
                 pos.ydPosition = data['Position']
@@ -1060,7 +1066,7 @@ class CtpTdApi(TdApi):
     #----------------------------------------------------------------------
     def onRspQryInstrument(self, data, error, n, last):
         """合约回报查询"""
-        
+        # print(data)
         """
         {'ShortMarginRatio': 0.08, 'EndDelivDate': '20190422', 'ProductID': 'au', 'PriceTick': 0.05, 'PositionType': '2', 'MinLimitOrderVolume': 1, 'ExchangeID': 'SHFE', 'DeliveryYear': 2019, 
         'MaxLimitOrderVolume': 500, 'MinSellVolume': 0, 'MinMarketOrderVolume': 1, 'InstrumentName': '黄金1904', 'InstrumentCode': '', 'IsTrading': 1, 'InstrumentID': 'au1904', 'LongMarginRatio': 0.08, 
@@ -1103,11 +1109,20 @@ class CtpTdApi(TdApi):
 
         # 推送
         self.gateway.onContract(contract)
-        self.contractsList.append(contract.symbol + VN_SEPARATOR + contract.exchange)
-        a = {"contracts":self.contractsList}
 
-        with open(getTempPath('contractList.json'),'w') as f:
-            json.dump(a,f,indent=4, ensure_ascii=False)
+        # 缓存合约信息，策略可以根据contract信息调整下单行为
+        contract_info = {}
+        contract_info['Exchange'] = contract.exchange
+        contract_info['VolumeMultiple'] = contract.size
+        contract_info['PriceTick'] = contract.priceTick
+        contract_info['StrikePrice'] = contract.strikePrice
+        contract_info['LongMarginRatio'] = data['LongMarginRatio']
+        contract_info['ShortMarginRatio'] = data['ShortMarginRatio']
+        
+        self.contractsDict.update({contract.vtSymbol:contract_info})
+
+        with open(getTempPath('contract_info.json'),'w') as f:
+            json.dump(self.contractsDict,f,indent=4, ensure_ascii=False)
 
         # 缓存合约代码和交易所映射
         symbolExchangeDict[contract.symbol] = contract.exchange
@@ -1749,6 +1764,14 @@ class CtpTdApi(TdApi):
         req['BrokerID'] = self.brokerID
         req['InvestorID'] = self.userID
         self.reqQryInvestorPosition(req, self.reqID)
+
+    def qryOrder(self):
+        """查询订单"""
+        self.reqID +=1
+        req={}
+        req['BrokerID'] = self.brokerID
+        req['InvestorID'] = self.userID
+        self.reqQryOrder(req, self.reqID)
 
     #----------------------------------------------------------------------
     def sendOrder(self, orderReq):
