@@ -293,6 +293,8 @@ class OkexfRestApi(RestClient):
         self.cancelDict = {}
         self.localRemoteDict = gateway.localRemoteDict
         self.orderDict = gateway.orderDict
+        self.contractMapReverse = {}
+
     
     #----------------------------------------------------------------------
     def sign(self, request):
@@ -430,28 +432,24 @@ class OkexfRestApi(RestClient):
                         callback=self.onQueryPosition)  
     
     #----------------------------------------------------------------------
-    def queryOrder(self):
+    def queryOrder(self, symbol = None, orderid=None):
         """"""
         self.writeLog('\n\n----------------------start Quary Orders,positions,Accounts-------------------')
+        if orderid:
+            req={}
+            path = '/api/futures/v3/orders/%s/%s' %(symbol,orderid)
+            self.addRequest('GET', path, params=req,
+                            callback=self.onQueryOrder)
+        
         for symbol in self.gateway.contracts:   #self.contractDict.keys():
-            for key,value in contractMap.items():
-                if value == symbol:
-                    symbol = key
-            # 未成交
+            symbol = self.contractMapReverse[symbol]
+            # 未成交,部分成交
             req = {
                 'instrument_id': symbol,
-                'status': 0
+                'status': 6
             }
             path = '/api/futures/v3/orders/%s' %symbol
             self.addRequest('GET', path, params=req,
-                            callback=self.onQueryOrder)
-            
-            # 部分成交
-            req2 = {
-                'instrument_id': symbol,
-                'status': 1
-            }
-            self.addRequest('GET', path, params=req2,
                             callback=self.onQueryOrder)
     
     #----------------------------------------------------------------------
@@ -495,7 +493,9 @@ class OkexfRestApi(RestClient):
             contract.symbol = value
             contract.vtSymbol = VN_SEPARATOR.join([contract.symbol, contract.gatewayName])
             self.gateway.onContract(contract)
-        
+
+        self.contractMapReverse = {v: k for k, v in contractMap.items()} 
+
         self.queryOrder()
         self.queryAccount()
         self.queryPosition()
@@ -562,71 +562,86 @@ class OkexfRestApi(RestClient):
                 self.gateway.onPosition(shortPosition)
     
     #----------------------------------------------------------------------
+    def fillOrderinfo(self,data,order):
+        d = data
+        order.price = float(d['price'])
+        order.price_avg = float(d['price_avg'])
+        order.totalVolume = int(d['size'])
+        order.thisTradedVolume = int(d['filled_qty']) - order.tradedVolume
+        order.tradedVolume = int(d['filled_qty'])
+        order.status = statusMapReverse[d['status']]
+        order.direction, order.offset = typeMapReverse[d['type']]
+        
+        dt = datetime.strptime(d['timestamp'], '%Y-%m-%dT%H:%M:%S.%fZ')
+        order.orderTime = dt.strftime('%Y%m%d %H:%M:%S')
+        order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
+        order.deliveryTime = datetime.now()
+        
+        self.gateway.onOrder(order)
+        self.orderDict[d['order_id']] = order
+
+        if order.thisTradedVolume:
+
+            wsApi = self.gateway.wsApi
+            wsApi.tradeID += 1
+            
+            trade = VtTradeData()
+            trade.gatewayName = order.gatewayName
+            trade.symbol = order.symbol
+            trade.exchange = order.exchange
+            trade.vtSymbol = order.vtSymbol
+            
+            trade.orderID = order.orderID
+            trade.vtOrderID = order.vtOrderID
+            trade.tradeID = str(wsApi.tradeID)
+            trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
+            
+            trade.direction = order.direction
+            trade.offset = order.offset
+            trade.volume = order.thisTradedVolume
+            trade.price = float(data['price_avg'])
+            trade.tradeDatetime = datetime.now()
+            trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
+            
+            self.gateway.onTrade(trade)
+
+    # ------------------------------------------------
     def onQueryOrder(self, data, request):
-        """{'result': True, 'order_info': [
+        """1,{'result': True, 'order_info': [
             {'instrument_id': 'EOS-USD-181228', 'size': '1', 'timestamp': '2018-11-28T08:57:40.000Z', 
             'filled_qty': '0', 'fee': '0', 'order_id': '1878226413689856', 'price': '3.075', 'price_avg': '0', 
-            'status': '0', 'type': '4', 'contract_val': '10', 'leverage': '10'}]} """
-        for d in data['order_info']:
-            #print(d,"or")
-
-            order = self.orderDict.get(str(d['order_id']),None)
-
-            if not order:
-                order = VtOrderData()
-                order.gatewayName = self.gatewayName
+            'status': '0', 'type': '4', 'contract_val': '10', 'leverage': '10'}]} 
+            2, {'instrument_id': 'ETH-USD-190329', 'size': '1', 'timestamp': '2019-01-08T13:30:00.000Z', 
+            'filled_qty': '0', 'fee': '0', 'order_id': '2111451974049792', 'price': '140.026', 
+            'price_avg': '0', 'status': '-1', 'type': '1', 'contract_val': '10', 'leverage': '10'}
+        """
+        #print(data,"order")
+        if 'order_info' not in data.keys():
+            order = self.orderDict.get(str(data['order_id']),None)
+            if order:
+                self.fillOrderinfo(data,order)
                 
-                order.symbol = contractMap.get(d['instrument_id'],None)
-                order.exchange = 'OKEX'
-                order.vtSymbol = VN_SEPARATOR.join([order.symbol, order.gatewayName])
+        else:
 
-                self.orderID += 1
-                order.orderID = str(self.loginTime + self.orderID)
-                order.vtOrderID = VN_SEPARATOR.join([self.gatewayName, order.orderID])
-                self.localRemoteDict[order.orderID] = d['order_id']
-                order.tradedVolume = 0
-                self.writeLog('order by other source, id: %s'%d['order_id'])
-            
-            order.price = float(d['price'])
-            order.price_avg = float(d['price_avg'])
-            order.totalVolume = int(d['size'])
-            order.thisTradedVolume = int(d['filled_qty']) - order.tradedVolume
-            order.tradedVolume = int(d['filled_qty'])
-            order.status = statusMapReverse[d['status']]
-            order.direction, order.offset = typeMapReverse[d['type']]
-            
-            dt = datetime.strptime(d['timestamp'], '%Y-%m-%dT%H:%M:%S.%fZ')
-            order.orderTime = dt.strftime('%Y%m%d %H:%M:%S')
-            order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
-            order.deliveryTime = datetime.now()
-            
-            self.gateway.onOrder(order)
-            self.orderDict[d['order_id']] = order
+            for d in data['order_info']:                
+                order = self.orderDict.get(str(d['order_id']),None)
 
-            if order.thisTradedVolume:
+                if not order:
+                    order = VtOrderData()
+                    order.gatewayName = self.gatewayName
+                    
+                    order.symbol = contractMap.get(d['instrument_id'],None)
+                    order.exchange = 'OKEX'
+                    order.vtSymbol = VN_SEPARATOR.join([order.symbol, order.gatewayName])
 
-                wsApi = self.gateway.wsApi
-                wsApi.tradeID += 1
+                    self.orderID += 1
+                    order.orderID = str(self.loginTime + self.orderID)
+                    order.vtOrderID = VN_SEPARATOR.join([self.gatewayName, order.orderID])
+                    self.localRemoteDict[order.orderID] = d['order_id']
+                    order.tradedVolume = 0
+                    self.writeLog('order by other source, id: %s, status:%s'%(d['order_id'],statusMapReverse[d['status']]))
                 
-                trade = VtTradeData()
-                trade.gatewayName = order.gatewayName
-                trade.symbol = order.symbol
-                trade.exchange = order.exchange
-                trade.vtSymbol = order.vtSymbol
-                
-                trade.orderID = order.orderID
-                trade.vtOrderID = order.vtOrderID
-                trade.tradeID = str(wsApi.tradeID)
-                trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
-                
-                trade.direction = order.direction
-                trade.offset = order.offset
-                trade.volume = order.thisTradedVolume
-                trade.price = float(data['price_avg'])
-                trade.tradeDatetime = datetime.now()
-                trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
-                
-                self.gateway.onTrade(trade)
+                self.fillOrderinfo(d, order)
     
     #----------------------------------------------------------------------
     def onSendOrderFailed(self, data, request):
@@ -690,17 +705,11 @@ class OkexfRestApi(RestClient):
 
             # could be risky,just testify
             if str(data['error_code']) == '32004':
-                order = self.orderDict.get(str(data['order_id']),None)
+                order = self.orderDict.get(str(data['order_id']), None)
                 if order:
-                    order.status = STATUS_CANCELLED
-                    self.gateway.onOrder(order)
-                    self.writeLog('risky feedback:order %s cancelled'%str(data['order_id']))
-                    for key,value in list(self.localRemoteDict.items()):
-                        if value == str(data['order_id']):
-                            del self.localRemoteDict[key]
-                            del self.orderDict[key]
-                            if self.orderDict.get(str(data['order_id']),None):
-                                del self.orderDict[str(data['order_id'])]
+                    contract = self.contractMapReverse[order.symbol]
+                    self.queryOrder(contract,data['order_id'])
+                self.writeLog('risky feedback:checkout order %s '%str(data['order_id']))
     
     #----------------------------------------------------------------------
     def onFailed(self, httpStatusCode, request):  # type:(int, Request)->None
