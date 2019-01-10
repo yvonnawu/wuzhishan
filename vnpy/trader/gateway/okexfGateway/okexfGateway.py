@@ -10,6 +10,7 @@ import hmac
 import sys
 import time
 import traceback
+import threading
 import base64
 import zlib
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from vnpy.api.websocket import WebsocketClient
 from vnpy.trader.vtGateway import *
 from vnpy.trader.vtFunction import getJsonPath, getTempPath
 from .text import ERRORCODE
+from .helper import OrderHelper
 
 REST_HOST = 'https://www.okex.com'
 WEBSOCKET_HOST = 'wss://real.okex.com:10440/websocket/okexapi?compress=true'
@@ -59,6 +61,7 @@ class OkexfGateway(VtGateway):
         self.qryEnabled = False     # 是否要启动循环查询
         self.localRemoteDict = {}   # localID:remoteID
         self.orderDict = {}         # remoteID:order
+        self.orderHelper = OrderHelper()
         self.loop = asyncio.get_event_loop()
 
         self.fileName = self.gatewayName + '_connect.json'
@@ -293,6 +296,7 @@ class OkexfRestApi(RestClient):
         self.cancelDict = {}
         self.localRemoteDict = gateway.localRemoteDict
         self.orderDict = gateway.orderDict
+        self.orderHelper = gateway.orderHelper
         self.contractMapReverse = {}
 
     
@@ -377,15 +381,14 @@ class OkexfRestApi(RestClient):
         order.price = orderReq.price
         order.totalVolume = orderReq.volume
         
+        self.orderHelper.insert_order(order.orderID, order)
+
         self.addRequest('POST', '/api/futures/v3/order', 
                         callback=self.onSendOrder, 
                         data=data, 
                         extra=order,
                         onFailed=self.onSendOrderFailed,
                         onError=self.onSendOrderError)
-
-        self.localRemoteDict[orderID] = orderID
-        self.orderDict[orderID] = order
         return vtOrderID
     
     #----------------------------------------------------------------------
@@ -393,12 +396,15 @@ class OkexfRestApi(RestClient):
         """限速规则：10次/2s"""
         #symbol = cancelOrderReq.symbol
         orderID = cancelOrderReq.orderID
-        remoteID = self.localRemoteDict.get(orderID, None)
-        print("\ncancelorder\n",remoteID,orderID)
-
-        if not remoteID:
-            self.cancelDict[orderID] = cancelOrderReq
-            return
+        # logic with cancelDict should be wrapped in lock_order
+        with self.orderHelper.lock_order(orderID):
+            binds = self.orderHelper.get_order_refs(orderID)
+            if binds:
+                remoteID = binds[0]
+            print("\ncancelorder\n",remoteID,orderID)
+            if not remoteID:
+                self.cancelDict[orderID] = cancelOrderReq
+                return
 
         for key,value in contractMap.items():
             if value == cancelOrderReq.symbol:
@@ -563,47 +569,52 @@ class OkexfRestApi(RestClient):
     
     #----------------------------------------------------------------------
     def fillOrderinfo(self,data,order):
-        d = data
-        order.price = float(d['price'])
-        order.price_avg = float(d['price_avg'])
-        order.totalVolume = int(d['size'])
-        order.thisTradedVolume = int(d['filled_qty']) - order.tradedVolume
-        order.tradedVolume = int(d['filled_qty'])
-        order.status = statusMapReverse[d['status']]
-        order.direction, order.offset = typeMapReverse[d['type']]
-        
-        dt = datetime.strptime(d['timestamp'], '%Y-%m-%dT%H:%M:%S.%fZ')
-        order.orderTime = dt.strftime('%Y%m%d %H:%M:%S')
-        order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
-        order.deliveryTime = datetime.now()
-        
-        self.gateway.onOrder(order)
-        self.orderDict[d['order_id']] = order
+        with self.orderHelper.lock_order(order.orderID):
+            order = self.orderHelper.get_order(order.orderID)
+            d = data
+            order.price = float(d['price'])
+            order.price_avg = float(d['price_avg'])
+            order.totalVolume = int(d['size'])
+            order.thisTradedVolume = int(d['filled_qty']) - order.tradedVolume
+            order.tradedVolume = int(d['filled_qty'])
+            order.status = statusMapReverse[d['status']]
+            order.direction, order.offset = typeMapReverse[d['type']]
+            
+            dt = datetime.strptime(d['timestamp'], '%Y-%m-%dT%H:%M:%S.%fZ')
+            order.orderTime = dt.strftime('%Y%m%d %H:%M:%S')
+            order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
+            order.deliveryTime = datetime.now()
+            
+            self.gateway.onOrder(order)
+            self.orderHelper.update_order(order.orderID, order)
 
-        if order.thisTradedVolume:
+            if order.thisTradedVolume:
 
-            wsApi = self.gateway.wsApi
-            wsApi.tradeID += 1
+                wsApi = self.gateway.wsApi
+                wsApi.tradeID += 1
+                
+                trade = VtTradeData()
+                trade.gatewayName = order.gatewayName
+                trade.symbol = order.symbol
+                trade.exchange = order.exchange
+                trade.vtSymbol = order.vtSymbol
+                
+                trade.orderID = order.orderID
+                trade.vtOrderID = order.vtOrderID
+                trade.tradeID = str(wsApi.tradeID)
+                trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
+                
+                trade.direction = order.direction
+                trade.offset = order.offset
+                trade.volume = order.thisTradedVolume
+                trade.price = float(data['price_avg'])
+                trade.tradeDatetime = datetime.now()
+                trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
+                
+                self.gateway.onTrade(trade)
             
-            trade = VtTradeData()
-            trade.gatewayName = order.gatewayName
-            trade.symbol = order.symbol
-            trade.exchange = order.exchange
-            trade.vtSymbol = order.vtSymbol
-            
-            trade.orderID = order.orderID
-            trade.vtOrderID = order.vtOrderID
-            trade.tradeID = str(wsApi.tradeID)
-            trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
-            
-            trade.direction = order.direction
-            trade.offset = order.offset
-            trade.volume = order.thisTradedVolume
-            trade.price = float(data['price_avg'])
-            trade.tradeDatetime = datetime.now()
-            trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
-            
-            self.gateway.onTrade(trade)
+            if order.status==STATUS_ALLTRADED or order.status==STATUS_CANCELLED:
+                self.orderHelper.remove_order(order.orderID)
 
     # ------------------------------------------------
     def onQueryOrder(self, data, request):
@@ -625,7 +636,6 @@ class OkexfRestApi(RestClient):
 
             for d in data['order_info']:                
                 order = self.orderDict.get(str(d['order_id']),None)
-
                 if not order:
                     order = VtOrderData()
                     order.gatewayName = self.gatewayName
@@ -640,7 +650,6 @@ class OkexfRestApi(RestClient):
                     self.localRemoteDict[order.orderID] = d['order_id']
                     order.tradedVolume = 0
                     self.writeLog('order by other source, id: %s, status:%s'%(d['order_id'],statusMapReverse[d['status']]))
-                
                 self.fillOrderinfo(d, order)
     
     #----------------------------------------------------------------------
@@ -649,10 +658,14 @@ class OkexfRestApi(RestClient):
         下单失败回调：服务器明确告知下单失败
         """
         self.writeLog("%s onsendorderfailed, %s"%(data,request.response.text))
-        order = request.extra
-        order.status = STATUS_REJECTED
-        order.rejectedInfo = str(eval(request.response.text)['code']) + ' ' + eval(request.response.text)['message']
-        self.gateway.onOrder(order)
+        try:
+            with self.orderHelper.lock_order(order.orderID):
+                order = request.extra
+                order.status = STATUS_REJECTED
+                order.rejectedInfo = str(eval(request.response.text)['code']) + ' ' + eval(request.response.text)['message']
+                self.gateway.onOrder(order)
+        finally:
+            self.orderHelper.remove_order(order.orderID)
     
     #----------------------------------------------------------------------
     def onSendOrderError(self, exceptionType, exceptionValue, tb, request):
@@ -660,22 +673,26 @@ class OkexfRestApi(RestClient):
         下单失败回调：连接错误
         """
         self.writeLog("%s onsendordererror, %s"%(exceptionType,exceptionValue))
-        order = request.extra
-        order.status = STATUS_REJECTED
-        order.rejectedInfo = "onSendOrderError: OKEX server issue"#str(eval(request.response.text)['code']) + ' ' + eval(request.response.text)['message']
-        self.gateway.onOrder(order)
+        try:
+            with self.orderHelper.lock_order(order.orderID):
+                order = request.extra
+                order.status = STATUS_REJECTED
+                order.rejectedInfo = "onSendOrderError: OKEX server issue"#str(eval(request.response.text)['code']) + ' ' + eval(request.response.text)['message']
+                self.gateway.onOrder(order)
+        finally:
+            self.orderHelper.remove_order(order.orderID)
     
     #----------------------------------------------------------------------
     def onSendOrder(self, data, request):
         """{'result': True, 'error_message': '', 'error_code': 0, 'client_oid': '181129173533', 
         'order_id': '1878377147147264'}"""
+        # logic with cancelDict should be wrapped in lock_order
+        with self.orderHelper.lock_order(data['client_oid']):
+            self.orderHelper.bind_order(data['client_oid'], data['order_id'])
 
-        self.localRemoteDict[data['client_oid']] = data['order_id']
-        self.orderDict[data['order_id']] = self.orderDict[data['client_oid']]#request.extra
-        
-        if data['client_oid'] in self.cancelDict:
-            req = self.cancelDict.pop(data['client_oid'])
-            self.cancelOrder(req)
+            if data['client_oid'] in self.cancelDict:
+                req = self.cancelDict.pop(data['client_oid'])
+                self.cancelOrder(req)
 
         if data['error_code']:
             self.writeLog('WARNING: %s sendorder error %s %s'%(data['client_oid'],data['error_code'],data['error_message']))
@@ -755,9 +772,8 @@ class OkexfWebsocketApi(WebsocketClient):
         self.apiSecret = ''
         self.passphrase = ''
         
-        self.orderDict = gateway.orderDict
-        self.localRemoteDict = gateway.localRemoteDict
-        
+        self.orderHelper = gateway.orderHelper
+
         self.tradeID = 0
         self.callbackDict = {}
         self.channelSymbolDict = {}
@@ -1007,8 +1023,20 @@ class OkexfWebsocketApi(WebsocketClient):
             'create_date': 1543397760669, 'status': 0}}  """
         data = d['data']
         # print(data)
-        order = self.orderDict.get(str(data['orderid']), None)
-        if not order:
+        clOrderID = None
+        if 'client_oid' in data.keys():
+            # TODO: is there always client_oid?
+            clOrderID = str(data['client_oid'])
+        tmp = self.orderHelper.get_order(str(data['orderid']))
+        if tmp and not clOrderID:
+            clOrderID = tmp.orderID
+        elif not tmp and clOrderID:
+            self.orderHelper.bind_order(clOrderID, str(data['orderid']))
+        if not clOrderID:
+            restApi = self.gateway.restApi
+            restApi.orderID += 1
+            clOrderID = str(restApi.loginTime + restApi.orderID)
+
             currency = data['contract_name'][:3]
             expiry = str(data['contract_id'])[2:8]
             
@@ -1018,58 +1046,50 @@ class OkexfWebsocketApi(WebsocketClient):
             order.exchange = 'OKEX'
             order.vtSymbol = VN_SEPARATOR.join([order.symbol, order.gatewayName])
 
-            if 'client_oid' in data.keys():
-                order.orderID = data['client_oid']
-            else:
-                restApi = self.gateway.restApi
-                restApi.orderID += 1
-                order.orderID = str(restApi.loginTime + restApi.orderID)
-
+            order.orderID = clOrderID
             order.vtOrderID = VN_SEPARATOR.join([self.gatewayName, order.orderID])
             order.price = data['price']
             order.totalVolume = int(data['amount'])
             order.tradedVolume = 0
             order.direction, order.offset = typeMapReverse[str(data['type'])]
+            self.orderHelper.insert_order(clOrderID, order)
+            # Order of outside will only be handled in this function rather than other thread.
+        
+        with self.orderHelper.lock_order(clOrderID):    
+            order = self.orderHelper.get_order(clOrderID)
+            order.orderTime = data['create_date_str'].replace("-","")#.split(' ')[-1]
+            order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
+            order.deliveryTime = datetime.now()   
+            order.thisTradedVolume = int(data['deal_amount']) - order.tradedVolume
+            order.status = statusMapReverse[str(data['status'])]
+            order.tradedVolume = int(data['deal_amount'])
 
-        order.orderTime = data['create_date_str'].replace("-","")#.split(' ')[-1]
-        order.orderDatetime = datetime.strptime(order.orderTime,'%Y%m%d %H:%M:%S')
-        order.deliveryTime = datetime.now()   
-        order.thisTradedVolume = int(data['deal_amount']) - order.tradedVolume
-        order.status = statusMapReverse[str(data['status'])]
-        order.tradedVolume = int(data['deal_amount'])
-
-        self.gateway.onOrder(copy(order))
-        self.localRemoteDict[order.orderID] = str(data['orderid'])
-        self.orderDict[str(data['orderid'])] = order
-
-        if order.thisTradedVolume:
-            self.tradeID += 1
+            self.gateway.onOrder(copy(order))
+            self.orderHelper.update_order(order.orderID, order)
             
-            trade = VtTradeData()
-            trade.gatewayName = order.gatewayName
-            trade.symbol = order.symbol
-            trade.exchange = order.exchange
-            trade.vtSymbol = order.vtSymbol
-            
-            trade.orderID = order.orderID
-            trade.vtOrderID = order.vtOrderID
-            trade.tradeID = str(self.tradeID)
-            trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
-            
-            trade.direction = order.direction
-            trade.offset = order.offset
-            trade.volume = order.thisTradedVolume
-            trade.price = float(data['price_avg'])
-            trade.tradeDatetime = datetime.now()
-            trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
-            self.gateway.onTrade(trade)
-        if order.status==STATUS_ALLTRADED or order.status==STATUS_CANCELLED:
-            if order.orderID in self.localRemoteDict:
-                del self.localRemoteDict[order.orderID]
-            if str(data['orderid']) in self.orderDict:
-                del self.orderDict[str(data['orderid'])]
-            if order.orderID in self.orderDict:
-                del self.orderDict[order.orderID]
+            if order.thisTradedVolume:
+                self.tradeID += 1
+                
+                trade = VtTradeData()
+                trade.gatewayName = order.gatewayName
+                trade.symbol = order.symbol
+                trade.exchange = order.exchange
+                trade.vtSymbol = order.vtSymbol
+                
+                trade.orderID = order.orderID
+                trade.vtOrderID = order.vtOrderID
+                trade.tradeID = str(self.tradeID)
+                trade.vtTradeID = VN_SEPARATOR.join([self.gatewayName, trade.tradeID])
+                
+                trade.direction = order.direction
+                trade.offset = order.offset
+                trade.volume = order.thisTradedVolume
+                trade.price = float(data['price_avg'])
+                trade.tradeDatetime = datetime.now()
+                trade.tradeTime = trade.tradeDatetime.strftime('%Y%m%d %H:%M:%S')
+                self.gateway.onTrade(trade)
+            if order.status==STATUS_ALLTRADED or order.status==STATUS_CANCELLED:
+                self.orderHelper.remove_order(order.orderID)
         
     #----------------------------------------------------------------------
     def onAccount(self, d):
