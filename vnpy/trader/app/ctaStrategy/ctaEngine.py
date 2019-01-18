@@ -515,6 +515,10 @@ class CtaEngine(object):
                     if error.gatewayName in sym:
                         self.writeCtaLog(u'ProcessError，错误码：%s，错误信息：%s' %(error.errorID, error.errorMsg))        # 待扩展
                         return
+    def processTimerEvent(self,event):
+        for strategy in self.strategyDict.values():
+            if strategy.inited:
+                self.callStrategyFunc(strategy, strategy.onTimer)
 
     #--------------------------------------------------
     def registerEvent(self):
@@ -525,6 +529,7 @@ class CtaEngine(object):
         self.eventEngine.register(EVENT_TRADE, self.processTradeEvent)
         self.eventEngine.register(EVENT_ACCOUNT, self.processAccountEvent)
         self.eventEngine.register(EVENT_ERROR, self.processErrorEvent)
+        self.eventEngine.register(EVENT_TIMER,self.processTimerEvent)
 
     #----------------------------------------------------------------------
     def insertData(self, dbName, collectionName, data):

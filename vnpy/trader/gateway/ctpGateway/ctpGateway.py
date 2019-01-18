@@ -929,6 +929,7 @@ class CtpTdApi(TdApi):
     def onRspQryOrder(self, data, error, n, last):
         """"""
         print(data)
+        
         pass
 
     #----------------------------------------------------------------------
@@ -1340,7 +1341,7 @@ class CtpTdApi(TdApi):
         """
         # 更新最大报单编号
         newref = data['OrderRef']
-        self.orderRef = max(self.orderRef, int(newref))
+        self.orderRef = max(self.orderRef, int(float(newref)))
 
         # 创建报单数据对象
         order = VtOrderData()
