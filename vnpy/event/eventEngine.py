@@ -122,7 +122,7 @@ class EventEngine(object):
         
         # 启动计时器，计时器事件间隔默认设定为1秒
         if timer:
-            self.__timer.start(1000)
+            self.__timer.start(500)
     
     #----------------------------------------------------------------------
     def stop(self):
